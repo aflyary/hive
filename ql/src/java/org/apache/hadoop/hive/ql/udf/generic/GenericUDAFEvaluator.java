@@ -46,7 +46,7 @@ import org.apache.hive.common.util.AnnotationUtils;
  * accept arguments of complex types, and return complex types. 2. It can accept
  * variable length of arguments. 3. It can accept an infinite number of function
  * signature - for example, it's easy to write a GenericUDAF that accepts
- * array<int>, array<array<int>> and so on (arbitrary levels of nesting).
+ * array&lt;int&gt;, array&lt;array&lt;int&gt;&gt; and so on (arbitrary levels of nesting).
  */
 @InterfaceAudience.Public
 @InterfaceStability.Stable
@@ -305,6 +305,7 @@ public abstract class GenericUDAFEvaluator implements Closeable {
    * @param partition   the partition data
    * @param parameters  the list of the expressions in the function
    * @param outputOI    the output object inspector
+   * @param nullsLast   the nulls last configuration
    * @return            the evaluator, default to BasePartitionEvaluator which
    *                    implements the naive approach
    */
@@ -312,9 +313,10 @@ public abstract class GenericUDAFEvaluator implements Closeable {
       WindowFrameDef winFrame,
       PTFPartition partition,
       List<PTFExpressionDef> parameters,
-      ObjectInspector outputOI) {
+      ObjectInspector outputOI, boolean nullsLast) {
     if (partitionEvaluator == null) {
-      partitionEvaluator = createPartitionEvaluator(winFrame, partition, parameters, outputOI);
+      partitionEvaluator = createPartitionEvaluator(winFrame, partition, parameters, outputOI,
+          nullsLast);
     }
 
     return partitionEvaluator;
@@ -328,7 +330,8 @@ public abstract class GenericUDAFEvaluator implements Closeable {
       WindowFrameDef winFrame,
       PTFPartition partition,
       List<PTFExpressionDef> parameters,
-      ObjectInspector outputOI) {
-    return new BasePartitionEvaluator(this, winFrame, partition, parameters, outputOI);
+      ObjectInspector outputOI,
+      boolean nullsLast) {
+    return new BasePartitionEvaluator(this, winFrame, partition, parameters, outputOI, nullsLast);
   }
 }

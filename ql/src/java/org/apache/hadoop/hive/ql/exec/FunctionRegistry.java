@@ -46,6 +46,7 @@ import org.apache.hadoop.hive.ql.udf.UDFAsin;
 import org.apache.hadoop.hive.ql.udf.UDFAtan;
 import org.apache.hadoop.hive.ql.udf.UDFBase64;
 import org.apache.hadoop.hive.ql.udf.UDFBin;
+import org.apache.hadoop.hive.ql.udf.UDFBuildVersion;
 import org.apache.hadoop.hive.ql.udf.UDFChr;
 import org.apache.hadoop.hive.ql.udf.UDFConv;
 import org.apache.hadoop.hive.ql.udf.UDFCos;
@@ -68,6 +69,7 @@ import org.apache.hadoop.hive.ql.udf.UDFFromUnixTime;
 import org.apache.hadoop.hive.ql.udf.UDFHex;
 import org.apache.hadoop.hive.ql.udf.UDFHour;
 import org.apache.hadoop.hive.ql.udf.UDFJson;
+import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFApproximateDistinct;
 import org.apache.hadoop.hive.ql.udf.generic.GenericUDFLength;
 import org.apache.hadoop.hive.ql.udf.UDFLike;
 import org.apache.hadoop.hive.ql.udf.UDFLn;
@@ -282,10 +284,12 @@ public final class FunctionRegistry {
     system.registerUDF("replace", UDFReplace.class, false);
     system.registerUDF("regexp_extract", UDFRegExpExtract.class, false);
     system.registerUDF("parse_url", UDFParseUrl.class, false);
-    system.registerGenericUDF("nvl", GenericUDFNvl.class);
+    system.registerGenericUDF("quote", GenericUDFQuote.class);
+    system.registerGenericUDF("nvl", GenericUDFCoalesce.class); //HIVE-20961
     system.registerGenericUDF("split", GenericUDFSplit.class);
     system.registerGenericUDF("str_to_map", GenericUDFStringToMap.class);
     system.registerGenericUDF("translate", GenericUDFTranslate.class);
+    system.registerGenericUDF("validate_acid_sort_order", GenericUDFValidateAcidSortOrder.class);
 
     system.registerGenericUDF(UNARY_PLUS_FUNC_NAME, GenericUDFOPPositive.class);
     system.registerGenericUDF(UNARY_MINUS_FUNC_NAME, GenericUDFOPNegative.class);
@@ -364,6 +368,8 @@ public final class FunctionRegistry {
     system.registerGenericUDF("restrict_information_schema", GenericUDFRestrictInformationSchema.class);
     system.registerGenericUDF("current_authorizer", GenericUDFCurrentAuthorizer.class);
 
+    system.registerGenericUDF("surrogate_key", GenericUDFSurrogateKey.class);
+
     system.registerGenericUDF("isnull", GenericUDFOPNull.class);
     system.registerGenericUDF("isnotnull", GenericUDFOPNotNull.class);
     system.registerGenericUDF("istrue", GenericUDFOPTrue.class);
@@ -391,6 +397,7 @@ public final class FunctionRegistry {
 
     // Utility UDFs
     system.registerUDF("version", UDFVersion.class, false);
+    system.registerUDF("buildversion", UDFBuildVersion.class, false);
 
     // Aliases for Java Class Names
     // These are used in getImplicitConvertUDFMethod
@@ -463,6 +470,7 @@ public final class FunctionRegistry {
 
     system.registerGenericUDAF("compute_stats", new GenericUDAFComputeStats());
     system.registerGenericUDAF("bloom_filter", new GenericUDAFBloomFilter());
+    system.registerGenericUDAF("approx_distinct", new GenericUDAFApproximateDistinct());
     system.registerUDAF("percentile", UDAFPercentile.class);
 
 
@@ -514,6 +522,9 @@ public final class FunctionRegistry {
     system.registerGenericUDF("internal_interval", GenericUDFInternalInterval.class);
 
     system.registerGenericUDF("to_epoch_milli", GenericUDFEpochMilli.class);
+    system.registerGenericUDF("bucket_number", GenericUDFBucketNumber.class);
+    system.registerGenericUDF("tumbling_window", GenericUDFTumbledWindow.class);
+
     // Generic UDTF's
     system.registerGenericUDTF("explode", GenericUDTFExplode.class);
     system.registerGenericUDTF("replicate_rows", GenericUDTFReplicateRows.class);
@@ -523,6 +534,7 @@ public final class FunctionRegistry {
     system.registerGenericUDTF("posexplode", GenericUDTFPosExplode.class);
     system.registerGenericUDTF("stack", GenericUDTFStack.class);
     system.registerGenericUDTF("get_splits", GenericUDTFGetSplits.class);
+    system.registerGenericUDTF("get_sql_schema", GenericUDTFGetSQLSchema.class);
 
     //PTF declarations
     system.registerGenericUDF(LEAD_FUNC_NAME, GenericUDFLead.class);
@@ -714,8 +726,8 @@ public final class FunctionRegistry {
    * return a TypeInfo corresponding to the common PrimitiveCategory, and with type qualifiers
    * (if applicable) that match the 2 TypeInfo types.
    * Examples:
-   *   varchar(10), varchar(20), primitive category varchar => varchar(20)
-   *   date, string, primitive category string => string
+   *   varchar(10), varchar(20), primitive category varchar =&gt; varchar(20)
+   *   date, string, primitive category string =&gt; string
    * @param a  TypeInfo of the first type
    * @param b  TypeInfo of the second type
    * @param typeCategory PrimitiveCategory of the designated common type between a and b
@@ -1111,8 +1123,11 @@ public final class FunctionRegistry {
       String detailedMsg = e instanceof java.lang.reflect.InvocationTargetException ?
         e.getCause().getMessage() : e.getMessage();
 
-      throw new HiveException("Unable to execute method " + m + " with arguments "
-          + argumentString + ":" + detailedMsg, e);
+      // Log the arguments into a debug message for the ease of debugging. But when exposed through
+      // an error message they can leak sensitive information, even to the client application.
+      LOG.trace("Unable to execute method " + m + " with arguments "
+              + argumentString);
+      throw new HiveException("Unable to execute method " + m + ":" + detailedMsg, e);
     }
     return o;
   }
@@ -1367,7 +1382,6 @@ public final class FunctionRegistry {
   /**
    * A shortcut to get the "index" GenericUDF. This is used for getting elements
    * out of array and getting values out of map.
-   * @throws SemanticException
    */
   public static GenericUDF getGenericUDFForIndex() {
     try {
@@ -1379,7 +1393,6 @@ public final class FunctionRegistry {
 
   /**
    * A shortcut to get the "and" GenericUDF.
-   * @throws SemanticException
    */
   public static GenericUDF getGenericUDFForAnd() {
     try {
@@ -1678,7 +1691,7 @@ public final class FunctionRegistry {
   }
 
   public static FunctionInfo registerPermanentFunction(String functionName,
-      String className, boolean registerToSession, FunctionResource[] resources) {
+      String className, boolean registerToSession, FunctionResource[] resources) throws SemanticException {
     return system.registerPermanentFunction(functionName, className, registerToSession, resources);
   }
 
@@ -1840,5 +1853,25 @@ public final class FunctionRegistry {
   public static void setupPermissionsForBuiltinUDFs(String whiteListStr,
       String blackListStr) {
     system.setupPermissionsForUDFs(whiteListStr, blackListStr);
+  }
+
+  /**
+   * Function to invert non-equi function texts
+   * @param funcText
+   */
+  public static String invertFuncText(final String funcText) {
+    // Reverse the text
+    switch (funcText) {
+      case "<":
+        return ">";
+      case "<=":
+        return ">=";
+      case ">":
+        return "<";
+      case ">=":
+        return "<=";
+      default:
+        return null; // helps identify unsupported functions
+    }
   }
 }

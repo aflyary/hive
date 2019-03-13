@@ -19,20 +19,19 @@ package org.apache.hadoop.hive.metastore.txn;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.common.ValidCompactorWriteIdList;
-import org.apache.hadoop.hive.common.ValidReaderWriteIdList;
 import org.apache.hadoop.hive.common.ValidReadTxnList;
 import org.apache.hadoop.hive.common.ValidTxnList;
-import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
-import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.metastore.TransactionalValidationListener;
-import org.apache.hadoop.hive.metastore.api.*;
+import org.apache.hadoop.hive.metastore.api.GetOpenTxnsResponse;
+import org.apache.hadoop.hive.metastore.api.Table;
+import org.apache.hadoop.hive.metastore.api.TableValidWriteIds;
+import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars;
 import org.apache.hadoop.hive.metastore.utils.JavaUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -42,107 +41,30 @@ import java.util.Map;
 public class TxnUtils {
   private static final Logger LOG = LoggerFactory.getLogger(TxnUtils.class);
 
-  // Transactional stats states
-  static final public char STAT_OPEN = 'o';
-  static final public char STAT_INVALID = 'i';
-  static final public char STAT_COMMITTED = 'c';
-  static final public char STAT_OBSOLETE = 's';
-
-  /**
-   * Transform a {@link org.apache.hadoop.hive.metastore.api.GetOpenTxnsResponse} to a
-   * {@link org.apache.hadoop.hive.common.ValidTxnList}.  This assumes that the caller intends to
-   * read the files, and thus treats both open and aborted transactions as invalid.
-   * @param txns txn list from the metastore
-   * @param currentTxn Current transaction that the user has open.  If this is greater than 0 it
-   *                   will be removed from the exceptions list so that the user sees his own
-   *                   transaction as valid.
-   * @return a valid txn list.
-   */
-  public static ValidTxnList createValidReadTxnList(GetOpenTxnsResponse txns, long currentTxn) {
-    /*
-     * The highWaterMark should be min(currentTxn,txns.getTxn_high_water_mark()) assuming currentTxn>0
-     * otherwise if currentTxn=7 and 8 commits before 7, then 7 will see result of 8 which
-     * doesn't make sense for Snapshot Isolation. Of course for Read Committed, the list should
-     * include the latest committed set.
-     */
-    long highWaterMark = (currentTxn > 0) ? Math.min(currentTxn, txns.getTxn_high_water_mark())
-                                          : txns.getTxn_high_water_mark();
-
-    // Open txns are already sorted in ascending order. This list may or may not include HWM
-    // but it is guaranteed that list won't have txn > HWM. But, if we overwrite the HWM with currentTxn
-    // then need to truncate the exceptions list accordingly.
-    List<Long> openTxns = txns.getOpen_txns();
-
-    // We care only about open/aborted txns below currentTxn and hence the size should be determined
-    // for the exceptions list. The currentTxn will be missing in openTxns list only in rare case like
-    // txn is aborted by AcidHouseKeeperService and compactor actually cleans up the aborted txns.
-    // So, for such cases, we get negative value for sizeToHwm with found position for currentTxn, and so,
-    // we just negate it to get the size.
-    int sizeToHwm = (currentTxn > 0) ? Collections.binarySearch(openTxns, currentTxn) : openTxns.size();
-    sizeToHwm = (sizeToHwm < 0) ? (-sizeToHwm) : sizeToHwm;
-    long[] exceptions = new long[sizeToHwm];
-    BitSet inAbortedBits = BitSet.valueOf(txns.getAbortedBits());
-    BitSet outAbortedBits = new BitSet();
-    long minOpenTxnId = Long.MAX_VALUE;
+  public static ValidTxnList createValidTxnListForCleaner(GetOpenTxnsResponse txns, long minOpenTxnGLB) {
+    long highWaterMark = minOpenTxnGLB - 1;
+    long[] abortedTxns = new long[txns.getOpen_txnsSize()];
+    BitSet abortedBits = BitSet.valueOf(txns.getAbortedBits());
     int i = 0;
-    for (long txn : openTxns) {
-      // For snapshot isolation, we don't care about txns greater than current txn and so stop here.
-      // Also, we need not include current txn to exceptions list.
-      if ((currentTxn > 0) && (txn >= currentTxn)) {
+    for(long txnId : txns.getOpen_txns()) {
+      if(txnId > highWaterMark) {
         break;
       }
-      if (inAbortedBits.get(i)) {
-        outAbortedBits.set(i);
-      } else if (minOpenTxnId == Long.MAX_VALUE) {
-        minOpenTxnId = txn;
+      if(abortedBits.get(i)) {
+        abortedTxns[i] = txnId;
       }
-      exceptions[i++] = txn;
+      else {
+        assert false : JavaUtils.txnIdToString(txnId) + " is open and <= hwm:" + highWaterMark;
+      }
+      ++i;
     }
-    return new ValidReadTxnList(exceptions, outAbortedBits, highWaterMark, minOpenTxnId);
+    abortedTxns = Arrays.copyOf(abortedTxns, i);
+    BitSet bitSet = new BitSet(abortedTxns.length);
+    bitSet.set(0, abortedTxns.length);
+    //add ValidCleanerTxnList? - could be problematic for all the places that read it from
+    // string as they'd have to know which object to instantiate
+    return new ValidReadTxnList(abortedTxns, bitSet, highWaterMark, Long.MAX_VALUE);
   }
-
-  /**
-   * Transform a {@link org.apache.hadoop.hive.metastore.api.GetValidWriteIdsResponse} to a
-   * {@link org.apache.hadoop.hive.common.ValidTxnWriteIdList}.  This assumes that the caller intends to
-   * read the files, and thus treats both open and aborted transactions as invalid.
-   * @param currentTxnId current txn ID for which we get the valid write ids list
-   * @param list valid write ids list from the metastore
-   * @return a valid write IDs list for the whole transaction.
-   */
-  public static ValidTxnWriteIdList createValidTxnWriteIdList(Long currentTxnId,
-                                                              List<TableValidWriteIds> validIds) {
-    ValidTxnWriteIdList validTxnWriteIdList = new ValidTxnWriteIdList(currentTxnId);
-    for (TableValidWriteIds tableWriteIds : validIds) {
-      validTxnWriteIdList.addTableValidWriteIdList(createValidReaderWriteIdList(tableWriteIds));
-    }
-    return validTxnWriteIdList;
-  }
-
-  /**
-   * Transform a {@link org.apache.hadoop.hive.metastore.api.TableValidWriteIds} to a
-   * {@link org.apache.hadoop.hive.common.ValidReaderWriteIdList}.  This assumes that the caller intends to
-   * read the files, and thus treats both open and aborted write ids as invalid.
-   * @param tableWriteIds valid write ids for the given table from the metastore
-   * @return a valid write IDs list for the input table
-   */
-  public static ValidReaderWriteIdList createValidReaderWriteIdList(TableValidWriteIds tableWriteIds) {
-    String fullTableName = tableWriteIds.getFullTableName();
-    long highWater = tableWriteIds.getWriteIdHighWaterMark();
-    List<Long> invalids = tableWriteIds.getInvalidWriteIds();
-    BitSet abortedBits = BitSet.valueOf(tableWriteIds.getAbortedBits());
-    long[] exceptions = new long[invalids.size()];
-    int i = 0;
-    for (long writeId : invalids) {
-      exceptions[i++] = writeId;
-    }
-    if (tableWriteIds.isSetMinOpenWriteId()) {
-      return new ValidReaderWriteIdList(fullTableName, exceptions, abortedBits, highWater,
-                                        tableWriteIds.getMinOpenWriteId());
-    } else {
-      return new ValidReaderWriteIdList(fullTableName, exceptions, abortedBits, highWater);
-    }
-  }
-
   /**
    * Transform a {@link org.apache.hadoop.hive.metastore.api.TableValidWriteIds} to a
    * {@link org.apache.hadoop.hive.common.ValidCompactorWriteIdList}.  This assumes that the caller intends to
@@ -181,17 +103,6 @@ public class TxnUtils {
     }
   }
 
-  public static ValidReaderWriteIdList updateForCompactionQuery(ValidReaderWriteIdList ids) {
-    // This is based on the existing valid write ID list that was built for a select query;
-    // therefore we assume all the aborted txns, etc. were already accounted for.
-    // All we do is adjust the high watermark to only include contiguous txns.
-    Long minOpenWriteId = ids.getMinOpenWriteId();
-    if (minOpenWriteId != null && minOpenWriteId != Long.MAX_VALUE) {
-      return ids.updateHighWatermark(ids.getMinOpenWriteId() - 1);
-    }
-    return ids;
-  }
-
   /**
    * Get an instance of the TxnStore that is appropriate for this store
    * @param conf configuration
@@ -221,6 +132,7 @@ public class TxnUtils {
       return false;
     }
     Map<String, String> parameters = table.getParameters();
+    if (parameters == null) return false;
     String tableIsTransactional = parameters.get(hive_metastoreConstants.TABLE_IS_TRANSACTIONAL);
     return tableIsTransactional != null && tableIsTransactional.equalsIgnoreCase("true");
   }

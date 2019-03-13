@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -39,6 +40,7 @@ import org.apache.hadoop.hive.common.BlobStorageUtils;
 import org.apache.hadoop.hive.common.StringInternUtils;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
+import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.ql.CompilationOpContext;
 import org.apache.hadoop.hive.ql.Context;
 import org.apache.hadoop.hive.ql.exec.ColumnInfo;
@@ -64,6 +66,7 @@ import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.mr.ExecDriver;
 import org.apache.hadoop.hive.ql.exec.mr.MapRedTask;
 import org.apache.hadoop.hive.ql.exec.spark.SparkTask;
+import org.apache.hadoop.hive.ql.exec.tez.TezTask;
 import org.apache.hadoop.hive.ql.hooks.ReadEntity;
 import org.apache.hadoop.hive.ql.io.RCFileInputFormat;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileWork;
@@ -417,7 +420,7 @@ public final class GenMapRedUtils {
     childPlan.setReduceWork(rWork);
     rWork.setReducer(reducer);
     ReduceSinkDesc desc = cRS.getConf();
-    childPlan.getReduceWork().setNumReduceTasks(new Integer(desc.getNumReducers()));
+    childPlan.getReduceWork().setNumReduceTasks(Integer.valueOf(desc.getNumReducers()));
 
     opProcCtx.getOpTaskMap().put(reducer, childTask);
 
@@ -431,8 +434,8 @@ public final class GenMapRedUtils {
    *          current alias
    * @param topOp
    *          the top operator of the stack
-   * @param plan
-   *          current plan
+   * @param task
+   *          current task
    * @param local
    *          whether you need to add to map-reduce or local work
    * @param opProcCtx
@@ -451,8 +454,8 @@ public final class GenMapRedUtils {
    *          current alias
    * @param topOp
    *          the top operator of the stack
-   * @param plan
-   *          current plan
+   * @param task
+   *          current task
    * @param local
    *          whether you need to add to map-reduce or local work
    * @param opProcCtx
@@ -473,13 +476,11 @@ public final class GenMapRedUtils {
    *
    * @param alias_id
    *          current alias
-   * @param topOp
-   *          the top operator of the stack
    * @param plan
    *          map work to initialize
    * @param local
    *          whether you need to add to map-reduce or local work
-   * @param pList
+   * @param partsList
    *          pruned partition list. If it is null it will be computed on-the-fly.
    * @param inputs
    *          read entities for the map work
@@ -761,7 +762,7 @@ public final class GenMapRedUtils {
    *          whether you need to add to map-reduce or local work
    * @param tt_desc
    *          table descriptor
-   * @throws SerDeException
+   * @throws SemanticException
    */
   public static void setTaskPlan(Path path, String alias,
       Operator<? extends OperatorDesc> topOp, MapWork plan, boolean local,
@@ -894,64 +895,67 @@ public final class GenMapRedUtils {
   }
 
   /**
-   * Called at the end of TaskCompiler::compile to derive final
-   * explain attributes based on previous compilation.
+   * Called at the end of TaskCompiler::compile
+   * This currently does the following for each map work
+   *   1.  Intern the table descriptors of the partitions
+   *   2.  derive final explain attributes based on previous compilation.
+   *
+   * The original implementation had 2 functions internTableDesc and deriveFinalExplainAttributes,
+   * respectively implementing 1 and 2 mentioned above.  This was done using recursion over the
+   * task graph.  The recursion was inefficient in a couple of ways.
+   *   - For large graphs the recursion was filling up the stack
+   *   - Instead of finding the mapworks, it was walking all possible paths from root
+   *     causing a huge performance problem.
+   *
+   * This implementation combines internTableDesc and deriveFinalExplainAttributes into 1 call.
+   * This can be done because each refers to information within Map Work and performs a specific
+   * action.
+   *
+   * The revised implementation generates all the map works from all MapReduce tasks (getMRTasks),
+   * Spark Tasks (getSparkTasks) and Tez tasks (getTezTasks).  Then for each of those map works
+   * invokes the respective call.  getMRTasks, getSparkTasks and getTezTasks iteratively walks
+   * the task graph to find the respective map works.
+   *
+   * The iterative implementation of these functions was done as part of HIVE-17195.  Before
+   * HIVE-17195, these functions were recursive and had the same issue.  So, picking this patch
+   * for an older release will also require picking HIVE-17195 at the least.
    */
-  public static void deriveFinalExplainAttributes(
-      Task<? extends Serializable> task, Configuration conf) {
-    // TODO: deriveExplainAttributes should be called here, code is too fragile to move it around.
-    if (task instanceof ConditionalTask) {
-      for (Task<? extends Serializable> tsk : ((ConditionalTask) task).getListTasks()) {
-        deriveFinalExplainAttributes(tsk, conf);
-      }
-    } else if (task instanceof ExecDriver) {
-      MapredWork work = (MapredWork) task.getWork();
-      work.getMapWork().deriveLlap(conf, true);
-    } else if (task != null && (task.getWork() instanceof TezWork)) {
-      TezWork work = (TezWork)task.getWork();
-      for (BaseWork w : work.getAllWorkUnsorted()) {
-        if (w instanceof MapWork) {
-          ((MapWork)w).deriveLlap(conf, false);
-        }
-      }
-    } else if (task instanceof SparkTask) {
-      SparkWork work = (SparkWork) task.getWork();
-      for (BaseWork w : work.getAllWorkUnsorted()) {
-        if (w instanceof MapWork) {
-          ((MapWork) w).deriveLlap(conf, false);
-        }
+  public static void finalMapWorkChores(
+      List<Task<? extends Serializable>> tasks, Configuration conf,
+      Interner<TableDesc> interner) {
+    List<ExecDriver> mrTasks = Utilities.getMRTasks(tasks);
+    if (!mrTasks.isEmpty()) {
+      for (ExecDriver execDriver : mrTasks) {
+        execDriver.getWork().getMapWork().internTable(interner);
+        execDriver.getWork().getMapWork().deriveLlap(conf, true);
       }
     }
 
-    if (task.getChildTasks() == null) {
-      return;
-    }
-
-    for (Task<? extends Serializable> childTask : task.getChildTasks()) {
-      deriveFinalExplainAttributes(childTask, conf);
-    }
-  }
-
-  public static void internTableDesc(Task<?> task, Interner<TableDesc> interner) {
-
-    if (task instanceof ConditionalTask) {
-      for (Task tsk : ((ConditionalTask) task).getListTasks()) {
-        internTableDesc(tsk, interner);
-      }
-    } else if (task instanceof ExecDriver) {
-      MapredWork work = (MapredWork) task.getWork();
-      work.getMapWork().internTable(interner);
-    } else if (task != null && (task.getWork() instanceof TezWork)) {
-      TezWork work = (TezWork)task.getWork();
-      for (BaseWork w : work.getAllWorkUnsorted()) {
-        if (w instanceof MapWork) {
-          ((MapWork)w).internTable(interner);
+    List<TezTask> tezTasks = Utilities.getTezTasks(tasks);
+    if (!tezTasks.isEmpty()) {
+      for (TezTask tezTask : tezTasks) {
+        if (tezTask.getWork() instanceof TezWork) {
+          TezWork work = tezTask.getWork();
+          for (BaseWork w : work.getAllWorkUnsorted()) {
+            if (w instanceof MapWork) {
+              ((MapWork)w).internTable(interner);
+              ((MapWork)w).deriveLlap(conf, false);
+            }
+          }
         }
       }
     }
-    if (task.getNumChild() > 0) {
-      for (Task childTask : task.getChildTasks()) {
-        internTableDesc(childTask, interner);
+
+    List<SparkTask> sparkTasks = Utilities.getSparkTasks(tasks);
+    if (!sparkTasks.isEmpty()) {
+      for (SparkTask sparkTask : sparkTasks) {
+        SparkWork work = sparkTask.getWork();
+        for (BaseWork w : work.getAllWorkUnsorted()) {
+          if (w instanceof MapWork) {
+            ((MapWork) w).internTable(interner);
+            ((MapWork) w).deriveLlap(conf, false);
+          }
+        }
       }
     }
   }
@@ -1248,11 +1252,11 @@ public final class GenMapRedUtils {
    *          v
    *          FileSinkOperator (fsMerge)
    *
-   *          Here the pathToPartitionInfo & pathToAlias will remain the same, which means the paths
+   *          Here the pathToPartitionInfo &amp; pathToAlias will remain the same, which means the paths
    *          do
    *          not contain the dynamic partitions (their parent). So after the dynamic partitions are
    *          created (after the first job finished before the moveTask or ConditionalTask start),
-   *          we need to change the pathToPartitionInfo & pathToAlias to include the dynamic
+   *          we need to change the pathToPartitionInfo &amp; pathToAlias to include the dynamic
    *          partition
    *          directories.
    *
@@ -1320,7 +1324,7 @@ public final class GenMapRedUtils {
       }
 
       // update the FileSinkOperator to include partition columns
-      usePartitionColumns(fsInputDesc.getTableInfo().getProperties(), dpCtx.getDPColNames());
+      usePartitionColumns(fsInputDesc.getTableInfo().getProperties(), fsInputDesc.getTable(), dpCtx.getDPColNames());
     } else {
       // non-partitioned table
       fsInputDesc.getTableInfo().getProperties().remove(
@@ -1610,8 +1614,8 @@ public final class GenMapRedUtils {
    *
    * @param fsInputDesc
    * @param finalName
+   * @param hasDynamicPartitions
    * @param ctx
-   * @param inputFormatClass
    * @return MergeWork if table is stored as RCFile or ORCFile,
    *         null otherwise
    */
@@ -2086,6 +2090,23 @@ public final class GenMapRedUtils {
     }
     return null;
   }
+
+  static void usePartitionColumns(Properties properties, Table table, List<String> partColNames) {
+    if (properties.containsKey(org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_PARTITION_COLUMNS)) {
+      usePartitionColumns(properties, partColNames);
+    } else {
+      List<FieldSchema> partCols = table.getPartCols();
+      String partNames = partCols.stream().map(FieldSchema::getName).collect(Collectors.joining("/"));
+      String partTypes = partCols.stream().map(FieldSchema::getType).collect(Collectors.joining(":"));
+      properties.setProperty(
+        org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_PARTITION_COLUMNS,
+        partNames);
+      properties.setProperty(
+        org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_PARTITION_COLUMN_TYPES,
+        partTypes);
+    }
+  }
+
   /**
    * Uses only specified partition columns.
    * Provided properties should be pre-populated with partition column names and types.

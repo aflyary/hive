@@ -27,6 +27,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.Task;
 import org.apache.hadoop.hive.ql.hooks.ReadEntity;
 import org.apache.hadoop.hive.ql.hooks.WriteEntity;
+import org.apache.hadoop.hive.ql.parse.ASTNode;
 import org.apache.hadoop.hive.ql.parse.BaseSemanticAnalyzer;
 import org.apache.hadoop.hive.ql.parse.ExplainConfiguration;
 import org.apache.hadoop.hive.ql.parse.ExplainConfiguration.VectorizationDetailLevel;
@@ -42,6 +43,8 @@ public class ExplainWork implements Serializable {
   private Path resFile;
   private ArrayList<Task<?>> rootTasks;
   private Task<?> fetchTask;
+  private ASTNode astTree;
+  private String astStringTree;
   private HashSet<ReadEntity> inputs;
   private HashSet<WriteEntity> outputs;
   private ParseContext pCtx;
@@ -51,6 +54,7 @@ public class ExplainWork implements Serializable {
   boolean appendTaskType;
 
   String cboInfo;
+  String cboPlan;
 
   private String optimizedSQL;
 
@@ -63,13 +67,18 @@ public class ExplainWork implements Serializable {
       ParseContext pCtx,
       List<Task<?>> rootTasks,
       Task<?> fetchTask,
+      ASTNode astTree,
       BaseSemanticAnalyzer analyzer,
       ExplainConfiguration config,
       String cboInfo,
-      String optimizedSQL) {
+      String optimizedSQL,
+      String cboPlan) {
     this.resFile = resFile;
     this.rootTasks = new ArrayList<Task<?>>(rootTasks);
     this.fetchTask = fetchTask;
+    if(astTree != null) {
+      this.astTree = astTree;
+    }
     this.analyzer = analyzer;
     if (analyzer != null) {
       this.inputs = analyzer.getInputs();
@@ -80,6 +89,7 @@ public class ExplainWork implements Serializable {
     this.pCtx = pCtx;
     this.cboInfo = cboInfo;
     this.optimizedSQL = optimizedSQL;
+    this.cboPlan = cboPlan;
     this.config = config;
   }
 
@@ -123,6 +133,17 @@ public class ExplainWork implements Serializable {
     this.outputs = outputs;
   }
 
+  public ASTNode getAstTree() {
+    return astTree;
+  }
+
+  public String getAstStringTree() {
+    if (astStringTree == null) {
+      astStringTree = astTree.dump();
+    }
+    return astStringTree;
+  }
+
   public boolean getExtended() {
     return config.isExtended();
   }
@@ -147,12 +168,20 @@ public class ExplainWork implements Serializable {
     return config.getVectorizationDetailLevel();
   }
 
+  public boolean isDebug() {
+    return config.isDebug();
+  }
+
   public ParseContext getParseContext() {
     return pCtx;
   }
 
   public void setParseContext(ParseContext pCtx) {
     this.pCtx = pCtx;
+  }
+
+  public boolean isCbo() {
+    return config.isCbo();
   }
 
   public boolean isLogical() {
@@ -195,6 +224,14 @@ public class ExplainWork implements Serializable {
     this.optimizedSQL = optimizedSQL;
   }
 
+  public String getCboPlan() {
+    return cboPlan;
+  }
+
+  public void setCboPlan(String cboPlan) {
+    this.cboPlan = cboPlan;
+  }
+
   public ExplainConfiguration getConfig() {
     return config;
   }
@@ -206,5 +243,7 @@ public class ExplainWork implements Serializable {
   public boolean isLocks() {
     return config.isLocks();
   }
-
+  public boolean isAst() {
+    return config.isAst();
+  }
 }

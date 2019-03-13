@@ -18,8 +18,8 @@
 
 package org.apache.hadoop.hive.metastore;
 
-import java.lang.reflect.Field;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -29,23 +29,34 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.lang.reflect.*;
+import static org.mockito.Mockito.mock;
 
 import com.google.common.collect.Sets;
-import org.apache.hadoop.hive.metastore.api.CreationMetadata;
+import org.apache.hadoop.hive.metastore.api.GetPartitionsFilterSpec;
+import org.apache.hadoop.hive.metastore.api.GetPartitionsProjectionSpec;
+import org.apache.hadoop.hive.metastore.api.GetPartitionsRequest;
+import org.apache.hadoop.hive.metastore.api.GetPartitionsResponse;
+import org.apache.hadoop.hive.metastore.api.PartitionSpec;
+import org.apache.hadoop.hive.metastore.api.PartitionSpecWithSharedSD;
+import org.apache.hadoop.hive.metastore.api.PartitionWithoutSD;
 import org.apache.hadoop.hive.metastore.client.builder.DatabaseBuilder;
 import org.apache.hadoop.hive.metastore.client.builder.TableBuilder;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars;
 import org.apache.hadoop.hive.metastore.utils.FileUtils;
+import org.apache.hadoop.hive.metastore.utils.MetaStoreServerUtils;
 import org.apache.hadoop.hive.metastore.utils.SecurityUtils;
 import org.datanucleus.api.jdo.JDOPersistenceManager;
 import org.datanucleus.api.jdo.JDOPersistenceManagerFactory;
@@ -57,6 +68,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.metastore.api.AggrStats;
 import org.apache.hadoop.hive.metastore.api.ColumnStatistics;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsData;
@@ -83,7 +95,7 @@ import org.apache.hadoop.hive.metastore.api.StringColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.Type;
 import org.apache.hadoop.hive.metastore.api.UnknownDBException;
-import org.apache.hadoop.hive.metastore.utils.MetaStoreUtils;
+import org.apache.hadoop.hive.metastore.api.EnvironmentContext;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.thrift.TException;
 import org.junit.Test;
@@ -96,6 +108,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 public abstract class TestHiveMetaStore {
   private static final Logger LOG = LoggerFactory.getLogger(TestHiveMetaStore.class);
@@ -122,6 +136,7 @@ public abstract class TestHiveMetaStore {
     conf.set("hive.key3", "");
     conf.set("hive.key4", "0");
     conf.set("datanucleus.autoCreateTables", "false");
+    conf.set("hive.in.test", "true");
 
     MetaStoreTestUtils.setConfForStandloneMode(conf);
     MetastoreConf.setLongVar(conf, ConfVars.BATCH_RETRIEVE_MAX, 2);
@@ -218,6 +233,9 @@ public abstract class TestHiveMetaStore {
         // from the metastore
         tbl = client.getTable(dbName, tblName);
       }
+
+      Assert.assertTrue(tbl.isSetId());
+      tbl.unsetId();
 
       Partition part = makePartitionObject(dbName, tblName, vals, tbl, "/part1");
       Partition part2 = makePartitionObject(dbName, tblName, vals2, tbl, "/part2");
@@ -465,7 +483,6 @@ public abstract class TestHiveMetaStore {
 
   private static List<String> makeVals(String ds, String id) {
     List <String> vals4 = new ArrayList<>(2);
-    vals4 = new ArrayList<>(2);
     vals4.add(ds);
     vals4.add(id);
     return vals4;
@@ -481,7 +498,7 @@ public abstract class TestHiveMetaStore {
     part4.setSd(tbl.getSd().deepCopy());
     part4.getSd().setSerdeInfo(tbl.getSd().getSerdeInfo().deepCopy());
     part4.getSd().setLocation(tbl.getSd().getLocation() + ptnLocationSuffix);
-    MetaStoreUtils.updatePartitionStatsFast(part4, tbl, warehouse, false, false, null, true);
+    MetaStoreServerUtils.updatePartitionStatsFast(part4, tbl, warehouse, false, false, null, true);
     return part4;
   }
 
@@ -660,6 +677,126 @@ public abstract class TestHiveMetaStore {
 
   }
 
+  @Test
+  public void testGetPartitionsWithSpec() throws Throwable {
+    // create a table with multiple partitions
+    List<Partition> createdPartitions = setupProjectionTestTable();
+    Table tbl = client.getTable("compdb", "comptbl");
+    GetPartitionsRequest request = new GetPartitionsRequest();
+    GetPartitionsProjectionSpec projectSpec = new GetPartitionsProjectionSpec();
+    projectSpec.setFieldList(Arrays
+        .asList("dbName", "tableName", "catName", "parameters", "lastAccessTime", "sd.location",
+            "values", "createTime", "sd.serdeInfo.serializationLib", "sd.cols"));
+    projectSpec.setExcludeParamKeyPattern("exclude%");
+    GetPartitionsFilterSpec filter = new GetPartitionsFilterSpec();
+    request.setDbName("compdb");
+    request.setTblName("comptbl");
+    request.setFilterSpec(filter);
+    request.setProjectionSpec(projectSpec);
+    GetPartitionsResponse response;
+    try {
+      response = client.getPartitionsWithSpecs(request);
+    } catch (Exception ex) {
+      ex.printStackTrace();
+      LOG.error("Exception while retriveing partitions", ex);
+      throw ex;
+    }
+
+    Assert.assertEquals(1, response.getPartitionSpecSize());
+    PartitionSpecWithSharedSD partitionSpecWithSharedSD =
+        response.getPartitionSpec().get(0).getSharedSDPartitionSpec();
+    Assert.assertNotNull(partitionSpecWithSharedSD.getSd());
+    StorageDescriptor sharedSD = partitionSpecWithSharedSD.getSd();
+    Assert.assertEquals("Root location should be set to table location", tbl.getSd().getLocation(),
+        sharedSD.getLocation());
+    Assert.assertFalse("Fields which are not requested should not be set",
+        sharedSD.isSetParameters());
+    Assert.assertNotNull(
+        "serializationLib class was requested but was not found in the returned partition",
+        sharedSD.getSerdeInfo().getSerializationLib());
+    Assert.assertNotNull("db name was requested but was not found in the returned partition",
+        response.getPartitionSpec().get(0).getDbName());
+    Assert.assertNotNull("Table name was requested but was not found in the returned partition",
+        response.getPartitionSpec().get(0).getTableName());
+    Assert.assertTrue("sd.cols was requested but was not found in the returned response",
+        partitionSpecWithSharedSD.getSd().isSetCols());
+    List<FieldSchema> origSdCols = createdPartitions.get(0).getSd().getCols();
+    Assert.assertEquals("Size of the requested sd.cols should be same", origSdCols.size(),
+        partitionSpecWithSharedSD.getSd().getCols().size());
+    for (int i = 0; i < origSdCols.size(); i++) {
+      FieldSchema origFs = origSdCols.get(i);
+      FieldSchema returnedFs = partitionSpecWithSharedSD.getSd().getCols().get(i);
+      Assert.assertEquals("Field schemas returned different than expected", origFs, returnedFs);
+    }
+    /*Assert
+        .assertNotNull("Catalog name was requested but was not found in the returned partition",
+            response.getPartitionSpec().get(0).getCatName());*/
+
+    List<PartitionWithoutSD> partitionWithoutSDS = partitionSpecWithSharedSD.getPartitions();
+    Assert.assertEquals(createdPartitions.size(), partitionWithoutSDS.size());
+    for (int i = 0; i < createdPartitions.size(); i++) {
+      Partition origPartition = createdPartitions.get(i);
+      PartitionWithoutSD returnedPartitionWithoutSD = partitionWithoutSDS.get(i);
+      Assert.assertEquals(String.format("Location returned for Partition %d is not correct", i),
+          origPartition.getSd().getLocation(),
+          sharedSD.getLocation() + returnedPartitionWithoutSD.getRelativePath());
+      Assert.assertTrue("createTime was request but is not set",
+          returnedPartitionWithoutSD.isSetCreateTime());
+      Assert.assertTrue("Partition parameters were requested but are not set",
+          returnedPartitionWithoutSD.isSetParameters());
+      // first partition has parameters set
+      if (i == 0) {
+        Assert.assertTrue("partition parameters not set",
+            returnedPartitionWithoutSD.getParameters().containsKey("key1"));
+        Assert.assertEquals("partition parameters does not contain included keys", "val1",
+            returnedPartitionWithoutSD.getParameters().get("key1"));
+        // excluded parameter should not be returned
+        Assert.assertFalse("Excluded parameter key returned",
+            returnedPartitionWithoutSD.getParameters().containsKey("excludeKey1"));
+        Assert.assertFalse("Excluded parameter key returned",
+            returnedPartitionWithoutSD.getParameters().containsKey("excludeKey2"));
+      }
+      List<String> returnedVals = returnedPartitionWithoutSD.getValues();
+      List<String> actualVals = origPartition.getValues();
+      for (int j = 0; j < actualVals.size(); j++) {
+        Assert.assertEquals(actualVals.get(j), returnedVals.get(j));
+      }
+    }
+  }
+
+
+  protected List<Partition> setupProjectionTestTable() throws Throwable {
+    //String catName = "catName";
+    String dbName = "compdb";
+    String tblName = "comptbl";
+    String typeName = "Person";
+    //String catName = "catName";
+    Map<String, String> dummyparams = new HashMap<>();
+    dummyparams.put("key1", "val1");
+    dummyparams.put("excludeKey1", "excludeVal1");
+    dummyparams.put("excludeKey2", "excludeVal2");
+    cleanUp(dbName, tblName, typeName);
+
+    List<List<String>> values = new ArrayList<>();
+    values.add(makeVals("2008-07-01 14:13:12", "14"));
+    values.add(makeVals("2008-07-01 14:13:12", "15"));
+    values.add(makeVals("2008-07-02 14:13:12", "15"));
+    values.add(makeVals("2008-07-03 14:13:12", "151"));
+
+    List<Partition> createdPartitions =
+        createMultiPartitionTableSchema(dbName, tblName, typeName, values);
+    Table tbl = client.getTable(dbName, tblName);
+    // add some dummy parameters to one of the partitions to confirm the fetching logic is working
+    Partition newPartition = createdPartitions.remove(0);
+    //Map<String, String> sdParams = new HashMap<>();
+    //dummyparams.put("sdkey1", "sdval1");
+    newPartition.setParameters(dummyparams);
+    //newPartition.getSd().setParameters(sdParams);
+
+    client.alter_partition(dbName, tblName, newPartition);
+    createdPartitions.add(0, newPartition);
+    return createdPartitions;
+  }
 
   @Test
   public void testDropTable() throws Throwable {
@@ -1269,6 +1406,7 @@ public abstract class TestHiveMetaStore {
 
       Table tbl2 = client.getTable(dbName, tblName);
       assertNotNull(tbl2);
+      Assert.assertTrue(tbl2.isSetId());
       assertEquals(tbl2.getDbName(), dbName);
       assertEquals(tbl2.getTableName(), tblName);
       assertEquals(tbl2.getSd().getCols().size(), typ1.getFields().size());
@@ -1302,6 +1440,7 @@ public abstract class TestHiveMetaStore {
         assertTrue(fieldSchemasFull.contains(fs));
       }
 
+      tbl2.unsetId();
       client.createTable(tbl2);
       if (isThriftClient) {
         tbl2 = client.getTable(tbl2.getDbName(), tbl2.getTableName());
@@ -1658,6 +1797,56 @@ public abstract class TestHiveMetaStore {
         .create(client, conf);
 
     client.getSchema(dbName, tblName);
+  }
+
+  @Test
+  public void testCreateAndGetTableWithDriver() throws Exception {
+    String dbName = "createDb";
+    String tblName = "createTbl";
+
+    client.dropTable(dbName, tblName);
+    silentDropDatabase(dbName);
+    new DatabaseBuilder()
+        .setName(dbName)
+        .create(client, conf);
+
+    createTable(dbName, tblName);
+    Table tblRead = client.getTable(dbName, tblName);
+    Assert.assertTrue(tblRead.isSetId());
+    long firstTableId = tblRead.getId();
+
+    createTable(dbName, tblName + "_2");
+    Table tblRead2 = client.getTable(dbName, tblName + "_2");
+    Assert.assertTrue(tblRead2.isSetId());
+    Assert.assertNotEquals(firstTableId, tblRead2.getId());
+  }
+
+  @Test
+  public void testCreateTableSettingId() throws Exception {
+    String dbName = "createDb";
+    String tblName = "createTbl";
+
+    client.dropTable(dbName, tblName);
+    silentDropDatabase(dbName);
+    new DatabaseBuilder()
+        .setName(dbName)
+        .create(client, conf);
+
+    Table table = new TableBuilder()
+        .setDbName(dbName)
+        .setTableName(tblName)
+        .addCol("foo", "string")
+        .addCol("bar", "string")
+        .build(conf);
+    table.setId(1);
+    try {
+      client.createTable(table);
+      Assert.fail("An error should happen when setting the id"
+          + " to create a table");
+    } catch (InvalidObjectException e) {
+      Assert.assertTrue(e.getMessage().contains("Id shouldn't be set"));
+      Assert.assertTrue(e.getMessage().contains(tblName));
+    }
   }
 
   @Test
@@ -2744,7 +2933,11 @@ public abstract class TestHiveMetaStore {
     return partitions;
   }
 
-  private void createMultiPartitionTableSchema(String dbName, String tblName,
+  private List<Partition> createMultiPartitionTableSchema(String dbName, String tblName,
+      String typeName, List<List<String>> values) throws Throwable {
+    return createMultiPartitionTableSchema(null, dbName, tblName, typeName, values);
+  }
+  private List<Partition> createMultiPartitionTableSchema(String catName, String dbName, String tblName,
       String typeName, List<List<String>> values) throws Throwable {
     createDb(dbName);
 
@@ -2755,6 +2948,7 @@ public abstract class TestHiveMetaStore {
     Table tbl = new TableBuilder()
         .setDbName(dbName)
         .setTableName(tblName)
+        .setCatName(catName)
         .addCol("name", ColumnType.STRING_TYPE_NAME)
         .addCol("income", ColumnType.INT_TYPE_NAME)
         .addPartCol("ds", ColumnType.STRING_TYPE_NAME)
@@ -2769,7 +2963,7 @@ public abstract class TestHiveMetaStore {
       tbl = client.getTable(dbName, tblName);
     }
 
-    createPartitions(dbName, tbl, values);
+    return createPartitions(dbName, tbl, values);
   }
 
   @Test
@@ -3098,5 +3292,57 @@ public abstract class TestHiveMetaStore {
     }
     int size = allUuids.size();
     assertEquals(numAPICallsPerThread * parallelCalls, size);
+  }
+
+  /**
+   * While altering partition(s), verify DO NOT calculate partition statistics if
+   * <ol>
+   *   <li>table property DO_NOT_UPDATE_STATS is true</li>
+   *   <li>STATS_AUTO_GATHER is false</li>
+   *   <li>Is View</li>
+   * </ol>
+   */
+  @Test
+  public void testUpdatePartitionStat_doesNotUpdateStats() throws Exception {
+    final String DB_NAME = "db1";
+    final String TABLE_NAME = "tbl1";
+    Table tbl = new TableBuilder()
+        .setDbName(DB_NAME)
+        .setTableName(TABLE_NAME)
+        .addCol("id", "int")
+        .addTableParam(StatsSetupConst.DO_NOT_UPDATE_STATS, "true")
+        .build(null);
+    List<String> vals = new ArrayList<>(2);
+    vals.add("col1");
+    vals.add("col2");
+    Partition part = new Partition();
+    part.setDbName(DB_NAME);
+    part.setTableName(TABLE_NAME);
+    part.setValues(vals);
+    part.setParameters(new HashMap<>());
+    part.setSd(tbl.getSd().deepCopy());
+    part.getSd().setSerdeInfo(tbl.getSd().getSerdeInfo());
+    part.getSd().setLocation(tbl.getSd().getLocation() + "/partCol=1");
+    Warehouse wh = mock(Warehouse.class);
+    //Execute initializeAddedPartition() and it should not trigger updatePartitionStatsFast() as DO_NOT_UPDATE_STATS is true
+    HiveMetaStore.HMSHandler hms = new HiveMetaStore.HMSHandler("", conf, false);
+    Method m = hms.getClass().getDeclaredMethod("initializeAddedPartition", Table.class, Partition.class,
+            boolean.class, EnvironmentContext.class);
+    m.setAccessible(true);
+    //Invoke initializeAddedPartition();
+    m.invoke(hms, tbl, part, false, null);
+    verify(wh, never()).getFileStatusesForLocation(part.getSd().getLocation());
+
+    //Remove tbl's DO_NOT_UPDATE_STATS & set STATS_AUTO_GATHER = false
+    tbl.unsetParameters();
+    MetastoreConf.setBoolVar(conf, ConfVars.STATS_AUTO_GATHER, false);
+    m.invoke(hms, tbl, part, false, null);
+    verify(wh, never()).getFileStatusesForLocation(part.getSd().getLocation());
+
+    //Set STATS_AUTO_GATHER = true and set tbl as a VIRTUAL_VIEW
+    MetastoreConf.setBoolVar(conf, ConfVars.STATS_AUTO_GATHER, true);
+    tbl.setTableType("VIRTUAL_VIEW");
+    m.invoke(hms, tbl, part, false, null);
+    verify(wh, never()).getFileStatusesForLocation(part.getSd().getLocation());
   }
 }

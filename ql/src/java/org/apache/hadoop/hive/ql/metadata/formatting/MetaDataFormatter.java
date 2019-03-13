@@ -20,10 +20,12 @@ package org.apache.hadoop.hive.ql.metadata.formatting;
 
 import java.io.DataOutputStream;
 import java.io.OutputStream;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.annotation.Nullable;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
@@ -69,6 +71,18 @@ public interface MetaDataFormatter {
       throws HiveException;
 
   /**
+   * Show a list of tables including table types.
+   */
+  public void showTablesExtended(DataOutputStream out, List<Table> tables)
+      throws HiveException;
+
+  /**
+   * Show a list of materialized views.
+   */
+  public void showMaterializedViews(DataOutputStream out, List<Table> materializedViews)
+      throws HiveException;
+
+  /**
    * Describe table.
    * @param out
    * @param colPath
@@ -78,7 +92,6 @@ public interface MetaDataFormatter {
    * @param cols
    * @param isFormatted - describe with formatted keyword
    * @param isExt
-   * @param isPretty
    * @param isOutputPadded - if true, add spacing and indentation
    * @param colStats
    * @param fkInfo  foreign keys information

@@ -129,9 +129,15 @@ POSTHOOK: Input: default@fact_daily_n4@ds=1
 495	1
 PREHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=484
 PREHOOK: type: QUERY
+PREHOOK: Input: default@fact_daily_n4
+PREHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
 POSTHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=484
 POSTHOOK: type: QUERY
-OPTIMIZED SQL: SELECT CAST(484 AS INTEGER) AS `x`
+POSTHOOK: Input: default@fact_daily_n4
+POSTHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
+OPTIMIZED SQL: SELECT CAST(484 AS INTEGER) AS `$f0`
 FROM `default`.`fact_daily_n4`
 WHERE `ds` = '1' AND `x` = 484
 STAGE DEPENDENCIES:
@@ -145,22 +151,22 @@ STAGE PLANS:
           TableScan
             alias: fact_daily_n4
             filterExpr: ((ds = '1') and (x = 484)) (type: boolean)
-            Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+            Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
             GatherStats: false
             Filter Operator
               isSamplingPred: false
               predicate: (x = 484) (type: boolean)
-              Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+              Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
               Select Operator
                 expressions: 484 (type: int)
                 outputColumnNames: _col0
-                Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
                 File Output Operator
                   compressed: false
                   GlobalTableId: 0
 #### A masked pattern was here ####
                   NumFilesPerFileSink: 1
-                  Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                  Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
 #### A masked pattern was here ####
                   table:
                       input format: org.apache.hadoop.mapred.SequenceFileInputFormat
@@ -249,9 +255,15 @@ POSTHOOK: Input: default@fact_daily_n4@ds=1
 484
 PREHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=495
 PREHOOK: type: QUERY
+PREHOOK: Input: default@fact_daily_n4
+PREHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
 POSTHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=495
 POSTHOOK: type: QUERY
-OPTIMIZED SQL: SELECT CAST(495 AS INTEGER) AS `x`
+POSTHOOK: Input: default@fact_daily_n4
+POSTHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
+OPTIMIZED SQL: SELECT CAST(495 AS INTEGER) AS `$f0`
 FROM `default`.`fact_daily_n4`
 WHERE `ds` = '1' AND `x` = 495
 STAGE DEPENDENCIES:
@@ -265,22 +277,22 @@ STAGE PLANS:
           TableScan
             alias: fact_daily_n4
             filterExpr: ((ds = '1') and (x = 495)) (type: boolean)
-            Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+            Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
             GatherStats: false
             Filter Operator
               isSamplingPred: false
               predicate: (x = 495) (type: boolean)
-              Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+              Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
               Select Operator
                 expressions: 495 (type: int)
                 outputColumnNames: _col0
-                Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
                 File Output Operator
                   compressed: false
                   GlobalTableId: 0
 #### A masked pattern was here ####
                   NumFilesPerFileSink: 1
-                  Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                  Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
 #### A masked pattern was here ####
                   table:
                       input format: org.apache.hadoop.mapred.SequenceFileInputFormat
@@ -369,9 +381,15 @@ POSTHOOK: Input: default@fact_daily_n4@ds=1
 495
 PREHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=1
 PREHOOK: type: QUERY
+PREHOOK: Input: default@fact_daily_n4
+PREHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
 POSTHOOK: query: explain extended SELECT x FROM fact_daily_n4 WHERE ds='1' and x=1
 POSTHOOK: type: QUERY
-OPTIMIZED SQL: SELECT CAST(1 AS INTEGER) AS `x`
+POSTHOOK: Input: default@fact_daily_n4
+POSTHOOK: Input: default@fact_daily_n4@ds=1
+#### A masked pattern was here ####
+OPTIMIZED SQL: SELECT CAST(1 AS INTEGER) AS `$f0`
 FROM `default`.`fact_daily_n4`
 WHERE `ds` = '1' AND `x` = 1
 STAGE DEPENDENCIES:
@@ -385,22 +403,22 @@ STAGE PLANS:
           TableScan
             alias: fact_daily_n4
             filterExpr: ((ds = '1') and (x = 1)) (type: boolean)
-            Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+            Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
             GatherStats: false
             Filter Operator
               isSamplingPred: false
               predicate: (x = 1) (type: boolean)
-              Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+              Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
               Select Operator
                 expressions: 1 (type: int)
                 outputColumnNames: _col0
-                Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
                 File Output Operator
                   compressed: false
                   GlobalTableId: 0
 #### A masked pattern was here ####
                   NumFilesPerFileSink: 1
-                  Statistics: Num rows: 1 Data size: 80 Basic stats: PARTIAL Column stats: NONE
+                  Statistics: Num rows: 1 Data size: 84 Basic stats: PARTIAL Column stats: NONE
 #### A masked pattern was here ####
                   table:
                       input format: org.apache.hadoop.mapred.SequenceFileInputFormat

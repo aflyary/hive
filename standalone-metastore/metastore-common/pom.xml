@@ -12,6 +12,10 @@
   <artifactId>hive-standalone-metastore-common</artifactId>
   <name>Hive Standalone Metastore Common Code</name>
 
+  <properties>
+    <standalone.metastore.path.to.root>..</standalone.metastore.path.to.root>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>org.apache.orc</groupId>
@@ -148,7 +152,6 @@
         </exclusion>
       </exclusions>
     </dependency>
-    <!-- This is our one and only Hive dependency.-->
     <dependency>
       <groupId>org.apache.hive</groupId>
       <artifactId>hive-storage-api</artifactId>
@@ -356,11 +359,6 @@
           </dependencies>
         </plugin>
         <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-checkstyle-plugin</artifactId>
-          <version>${maven.checkstyle.plugin.version}</version>
-        </plugin>
-        <plugin>
           <groupId>org.codehaus.mojo</groupId>
           <artifactId>exec-maven-plugin</artifactId>
           <version>${maven.exec.plugin.version}</version>
@@ -415,15 +413,6 @@
         </executions>
       </plugin>
       <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-checkstyle-plugin</artifactId>
-        <configuration>
-          <configLocation>${checkstyle.conf.dir}/checkstyle.xml</configLocation>
-          <propertyExpansion>config_loc=${checkstyle.conf.dir}</propertyExpansion>
-          <includeTestSourceDirectory>true</includeTestSourceDirectory>
-        </configuration>
-      </plugin>
-      <plugin>
         <groupId>com.github.os72</groupId>
         <artifactId>protoc-jar-maven-plugin</artifactId>
         <version>3.5.1.1</version>
@@ -444,28 +433,6 @@
         </executions>
       </plugin>
       <!-- TODO MS-SPLIT javadoc plugin -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-assembly-plugin</artifactId>
-        <version>${maven.assembly.plugin.version}</version>
-        <executions>
-          <execution>
-            <id>assemble</id>
-            <phase>package</phase>
-            <goals>
-              <goal>single</goal>
-            </goals>
-            <configuration>
-              <finalName>apache-hive-metastore-${project.version}</finalName>
-              <descriptors>
-                <descriptor>src/assembly/bin.xml</descriptor>
-                <descriptor>src/assembly/src.xml</descriptor>
-              </descriptors>
-              <tarLongFileMode>gnu</tarLongFileMode>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
@@ -522,13 +489,11 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>${maven.surefire.version}</version>
         <configuration>
           <redirectTestOutputToFile>true</redirectTestOutputToFile>
           <reuseForks>false</reuseForks>
           <forkCount>${test.forkcount}</forkCount>
           <argLine>-Xmx2048m</argLine>
-          <failIfNoTests>false</failIfNoTests>
           <systemPropertyVariables>
             <build.dir>${project.build.directory}</build.dir>
             <datanucleus.schema.autoCreateAll>true</datanucleus.schema.autoCreateAll>
@@ -619,6 +584,20 @@
           <outputDirectory>${project.build.directory}/generated-sources</outputDirectory>
           <sourceDirectory>${basedir}/src/main/java</sourceDirectory>
         </configuration>
+      </plugin>
+      <plugin>
+        <!-- Suppress source assembly -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>assemble</id>
+            <phase>none</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

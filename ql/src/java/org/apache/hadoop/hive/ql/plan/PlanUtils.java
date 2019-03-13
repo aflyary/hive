@@ -46,6 +46,7 @@ import org.apache.hadoop.hive.ql.exec.TableScanOperator;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.hooks.ReadEntity;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
+import org.apache.hadoop.hive.ql.io.HiveSequenceFileInputFormat;
 import org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat;
 import org.apache.hadoop.hive.ql.io.RCFileInputFormat;
 import org.apache.hadoop.hive.ql.io.RCFileOutputFormat;
@@ -72,6 +73,7 @@ import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
 import org.apache.hadoop.hive.serde2.lazybinary.LazyBinarySerDe;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoFactory;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
@@ -279,7 +281,10 @@ public final class PlanUtils {
 
     Class inputFormat, outputFormat;
     // get the input & output file formats
-    if ("SequenceFile".equalsIgnoreCase(fileFormat)) {
+    if ("HiveSequenceFile".equalsIgnoreCase(fileFormat)) {
+      inputFormat = HiveSequenceFileInputFormat.class;
+      outputFormat = SequenceFileOutputFormat.class;
+    } else if ("SequenceFile".equalsIgnoreCase(fileFormat)) {
       inputFormat = SequenceFileInputFormat.class;
       outputFormat = SequenceFileOutputFormat.class;
     } else if ("RCFile".equalsIgnoreCase(fileFormat)) {
@@ -981,6 +986,14 @@ public final class PlanUtils {
       if (storageHandler != null) {
         storageHandler.configureJobConf(tableDesc, jobConf);
       }
+      if (tableDesc.getJobSecrets() != null) {
+        for (Map.Entry<String, String> entry : tableDesc.getJobSecrets().entrySet()) {
+          String key = TableDesc.SECRET_PREFIX + TableDesc.SECRET_DELIMIT +
+                  tableDesc.getTableName() + TableDesc.SECRET_DELIMIT + entry.getKey();
+          jobConf.getCredentials().addSecretKey(new Text(key), entry.getValue().getBytes());
+        }
+        tableDesc.getJobSecrets().clear();
+      }
     } catch (HiveException e) {
       throw new RuntimeException(e);
     }
@@ -995,7 +1008,7 @@ public final class PlanUtils {
   }
 
   /**
-   * Remove prefix from "Path -> Alias"
+   * Remove prefix from "Path -&gt; Alias"
    * This is required for testing.
    * In order to verify that path is right, we need to display it in expected test result.
    * But, mask pattern masks path with some patterns.

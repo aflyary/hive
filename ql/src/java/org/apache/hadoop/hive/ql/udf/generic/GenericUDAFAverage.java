@@ -130,7 +130,7 @@ public class GenericUDAFAverage extends AbstractGenericUDAFResolver {
     @Override
     public void doReset(AverageAggregationBuffer<Double> aggregation) throws HiveException {
       aggregation.count = 0;
-      aggregation.sum = new Double(0);
+      aggregation.sum = Double.valueOf(0);
       aggregation.uniqueObjects = new HashSet<ObjectInspectorObject>();
     }
 
@@ -225,7 +225,7 @@ public class GenericUDAFAverage extends AbstractGenericUDAFResolver {
             throws HiveException {
           AverageAggregationBuffer<Double> myagg = (AverageAggregationBuffer<Double>) ss.wrappedBuf;
           return myagg.count == 0 ? null : new Object[] {
-              new Double(myagg.sum), myagg.count };
+              myagg.sum, myagg.count};
         }
 
       };
@@ -236,11 +236,13 @@ public class GenericUDAFAverage extends AbstractGenericUDAFResolver {
         WindowFrameDef winFrame,
         PTFPartition partition,
         List<PTFExpressionDef> parameters,
-        ObjectInspector outputOI) {
+        ObjectInspector outputOI,
+        boolean nullsLast) {
       try {
-        return new BasePartitionEvaluator.AvgPartitionDoubleEvaluator(this, winFrame, partition, parameters, inputOI, outputOI);
+        return new BasePartitionEvaluator.AvgPartitionDoubleEvaluator(this, winFrame, partition,
+            parameters, inputOI, outputOI, nullsLast);
       } catch(HiveException e) {
-        return super.createPartitionEvaluator(winFrame, partition, parameters, outputOI);
+        return super.createPartitionEvaluator(winFrame, partition, parameters, outputOI, nullsLast);
       }
     }
   }
@@ -414,11 +416,13 @@ public class GenericUDAFAverage extends AbstractGenericUDAFResolver {
         WindowFrameDef winFrame,
         PTFPartition partition,
         List<PTFExpressionDef> parameters,
-        ObjectInspector outputOI) {
+        ObjectInspector outputOI,
+        boolean nullsLast) {
       try {
-        return new BasePartitionEvaluator.AvgPartitionHiveDecimalEvaluator(this, winFrame, partition, parameters, inputOI, outputOI);
+        return new BasePartitionEvaluator.AvgPartitionHiveDecimalEvaluator(this, winFrame,
+            partition, parameters, inputOI, outputOI, nullsLast);
       } catch(HiveException e) {
-        return super.createPartitionEvaluator(winFrame, partition, parameters, outputOI);
+        return super.createPartitionEvaluator(winFrame, partition, parameters, outputOI, nullsLast);
       }
     }
   }

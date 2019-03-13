@@ -25,10 +25,10 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.HiveMetaException;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
-import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper;
-import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper.MetaStoreConnectionInfo;
-import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper.NestedScriptParser;
-import org.apache.hadoop.hive.metastore.tools.MetastoreSchemaTool;
+import org.apache.hadoop.hive.metastore.tools.schematool.HiveSchemaHelper;
+import org.apache.hadoop.hive.metastore.tools.schematool.MetastoreSchemaTool;
+import org.apache.hadoop.hive.metastore.tools.schematool.HiveSchemaHelper.MetaStoreConnectionInfo;
+import org.apache.hadoop.hive.metastore.tools.schematool.HiveSchemaHelper.NestedScriptParser;
 import org.apache.hive.beeline.BeeLine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,7 +100,7 @@ public class HiveSchemaTool extends MetastoreSchemaTool {
       // we always add a line separator at the end while calling dbCommandParser.buildCommand.
       beeLine.getOpts().setEntireLineAsCommand(true);
       LOG.debug("Going to run command <" + builder.buildToLog() + ">");
-      int status = beeLine.begin(builder.buildToRun(), null);
+      int status = beeLine.begin(builder.buildToRun(), null, false);
       if (status != 0) {
         throw new IOException("Schema script failed, errorcode " + status);
       }

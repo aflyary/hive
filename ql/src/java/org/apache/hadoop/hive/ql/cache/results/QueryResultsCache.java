@@ -60,11 +60,12 @@ import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.NotificationEvent;
-import org.apache.hadoop.hive.metastore.messaging.MessageFactory;
+import org.apache.hadoop.hive.metastore.messaging.MessageBuilder;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.hooks.Entity.Type;
 import org.apache.hadoop.hive.ql.hooks.ReadEntity;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
+import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.metadata.SessionHiveMetaStoreClient;
 import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.hive.ql.metadata.events.EventConsumer;
@@ -411,10 +412,6 @@ public final class QueryResultsCache {
   /**
    * Check if the cache contains an entry for the requested LookupInfo.
    * @param request
-   * @param addReader Should the reader count be incremented during the lookup.
-   *        This will ensure the returned entry can be used after the lookup.
-   *        If true, the caller will be responsible for decrementing the reader count
-   *        using CacheEntry.releaseReader().
    * @return  The cached result if there is a match in the cache, or null if no match is found.
    */
   public CacheEntry lookup(LookupInfo request) {
@@ -790,7 +787,16 @@ public final class QueryResultsCache {
     String dirName = UUID.randomUUID().toString();
     Path cachedResultsPath = new Path(cacheDirPath, dirName);
     FileSystem fs = cachedResultsPath.getFileSystem(conf);
-    fs.rename(queryResultsPath, cachedResultsPath);
+    try {
+      boolean resultsMoved = Hive.moveFile(conf, queryResultsPath, cachedResultsPath, false, false, false);
+      if (!resultsMoved) {
+        throw new IOException("Failed to move " + queryResultsPath + " to " + cachedResultsPath);
+      }
+    } catch (IOException err) {
+      throw err;
+    } catch (Exception err) {
+      throw new IOException("Error moving " + queryResultsPath + " to " + cachedResultsPath, err);
+    }
     return cachedResultsPath;
   }
 
@@ -987,12 +993,12 @@ public final class QueryResultsCache {
       String tableName;
 
       switch (event.getEventType()) {
-      case MessageFactory.ADD_PARTITION_EVENT:
-      case MessageFactory.ALTER_PARTITION_EVENT:
-      case MessageFactory.DROP_PARTITION_EVENT:
-      case MessageFactory.ALTER_TABLE_EVENT:
-      case MessageFactory.DROP_TABLE_EVENT:
-      case MessageFactory.INSERT_EVENT:
+      case MessageBuilder.ADD_PARTITION_EVENT:
+      case MessageBuilder.ALTER_PARTITION_EVENT:
+      case MessageBuilder.DROP_PARTITION_EVENT:
+      case MessageBuilder.ALTER_TABLE_EVENT:
+      case MessageBuilder.DROP_TABLE_EVENT:
+      case MessageBuilder.INSERT_EVENT:
         dbName = event.getDbName();
         tableName = event.getTableName();
         break;

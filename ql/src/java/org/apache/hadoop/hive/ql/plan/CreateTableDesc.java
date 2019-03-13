@@ -28,7 +28,10 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.metastore.PartitionManagementTask;
 import org.apache.hadoop.hive.metastore.TableType;
+import org.apache.hadoop.hive.metastore.api.ColumnStatistics;
+import org.apache.hadoop.hive.metastore.api.ColumnStatisticsDesc;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.Order;
 import org.apache.hadoop.hive.metastore.api.SQLCheckConstraint;
@@ -37,6 +40,7 @@ import org.apache.hadoop.hive.metastore.api.SQLForeignKey;
 import org.apache.hadoop.hive.metastore.api.SQLNotNullConstraint;
 import org.apache.hadoop.hive.metastore.api.SQLPrimaryKey;
 import org.apache.hadoop.hive.metastore.api.SQLUniqueConstraint;
+import org.apache.hadoop.hive.metastore.txn.TxnUtils;
 import org.apache.hadoop.hive.metastore.utils.MetaStoreUtils;
 import org.apache.hadoop.hive.ql.ErrorMsg;
 import org.apache.hadoop.hive.ql.exec.DDLTask;
@@ -105,10 +109,13 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
   List<SQLNotNullConstraint> notNullConstraints;
   List<SQLDefaultConstraint> defaultConstraints;
   List<SQLCheckConstraint> checkConstraints;
+  private ColumnStatistics colStats;
   private Long initialMmWriteId; // Initial MM write ID for CTAS and import.
   // The FSOP configuration for the FSOP that is going to write initial data during ctas.
   // This is not needed beyond compilation, so it is transient.
   private transient FileSinkDesc writer;
+  private Long replWriteId; // to be used by repl task to get the txn and valid write id list
+  private String ownerName = null;
 
   public CreateTableDesc() {
   }
@@ -125,7 +132,8 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
       boolean ifNotExists, List<String> skewedColNames, List<List<String>> skewedColValues,
       List<SQLPrimaryKey> primaryKeys, List<SQLForeignKey> foreignKeys,
       List<SQLUniqueConstraint> uniqueConstraints, List<SQLNotNullConstraint> notNullConstraints,
-      List<SQLDefaultConstraint> defaultConstraints, List<SQLCheckConstraint> checkConstraints) {
+      List<SQLDefaultConstraint> defaultConstraints, List<SQLCheckConstraint> checkConstraints,
+      ColumnStatistics colStats) {
 
     this(tableName, isExternal, isTemporary, cols, partCols,
         bucketCols, sortCols, numBuckets, fieldDelim, fieldEscape,
@@ -135,6 +143,7 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
         primaryKeys, foreignKeys, uniqueConstraints, notNullConstraints, defaultConstraints, checkConstraints);
 
     this.databaseName = databaseName;
+    this.colStats = colStats;
   }
 
   public CreateTableDesc(String databaseName, String tableName, boolean isExternal, boolean isTemporary,
@@ -155,7 +164,8 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
         collItemDelim, mapKeyDelim, lineDelim, comment, inputFormat,
         outputFormat, location, serName, storageHandler, serdeProps,
         tblProps, ifNotExists, skewedColNames, skewedColValues,
-        primaryKeys, foreignKeys, uniqueConstraints, notNullConstraints, defaultConstraints, checkConstraints);
+        primaryKeys, foreignKeys, uniqueConstraints, notNullConstraints, defaultConstraints, checkConstraints,
+       null);
     this.partColNames = partColNames;
     this.isCTAS = isCTAS;
   }
@@ -836,6 +846,11 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
     if (isExternal()) {
       tbl.setProperty("EXTERNAL", "TRUE");
       tbl.setTableType(TableType.EXTERNAL_TABLE);
+      // only add if user have not explicit set it (user explicitly disabled for example in which case don't flip it)
+      if (tbl.getProperty(PartitionManagementTask.DISCOVER_PARTITIONS_TBLPROPERTY) == null) {
+        // partition discovery is on by default if undefined
+        tbl.setProperty(PartitionManagementTask.DISCOVER_PARTITIONS_TBLPROPERTY, "true");
+      }
     }
 
     // If the sorted columns is a superset of bucketed columns, store this fact.
@@ -871,14 +886,33 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
       }
     }
 
-    if (!this.isCTAS && (tbl.getPath() == null || (tbl.isEmpty() && !isExternal()))) {
-      if (!tbl.isPartitioned() && conf.getBoolVar(HiveConf.ConfVars.HIVESTATSAUTOGATHER)) {
-        StatsSetupConst.setStatsStateForCreateTable(tbl.getTTable().getParameters(),
-            MetaStoreUtils.getColumnNames(tbl.getCols()), StatsSetupConst.TRUE);
-      }
+    if (colStats != null) {
+      ColumnStatisticsDesc colStatsDesc = new ColumnStatisticsDesc(colStats.getStatsDesc());
+      colStatsDesc.setCatName(tbl.getCatName());
+      colStatsDesc.setDbName(getTableName());
+      colStatsDesc.setDbName(getDatabaseName());
+      tbl.getTTable().setColStats(new ColumnStatistics(colStatsDesc, colStats.getStatsObj()));
+    }
+
+    // The statistics for non-transactional tables will be obtained from the source. Do not
+    // reset those on replica.
+    if (replicationSpec != null && replicationSpec.isInReplicationScope() &&
+        !TxnUtils.isTransactionalTable(tbl.getTTable())) {
+      // Do nothing to the table statistics.
     } else {
-      StatsSetupConst.setStatsStateForCreateTable(tbl.getTTable().getParameters(), null,
-          StatsSetupConst.FALSE);
+      if (!this.isCTAS && (tbl.getPath() == null || (tbl.isEmpty() && !isExternal()))) {
+        if (!tbl.isPartitioned() && conf.getBoolVar(HiveConf.ConfVars.HIVESTATSAUTOGATHER)) {
+          StatsSetupConst.setStatsStateForCreateTable(tbl.getTTable().getParameters(),
+                  MetaStoreUtils.getColumnNames(tbl.getCols()), StatsSetupConst.TRUE);
+        }
+      } else {
+        StatsSetupConst.setStatsStateForCreateTable(tbl.getTTable().getParameters(), null,
+                StatsSetupConst.FALSE);
+      }
+    }
+
+    if (ownerName != null) {
+      tbl.setOwner(ownerName);
     }
     return tbl;
   }
@@ -901,5 +935,21 @@ public class CreateTableDesc extends DDLDesc implements Serializable {
 
   public void setWriter(FileSinkDesc writer) {
     this.writer = writer;
+  }
+
+  public Long getReplWriteId() {
+    return replWriteId;
+  }
+
+  public void setReplWriteId(Long replWriteId) {
+    this.replWriteId = replWriteId;
+  }
+
+  public String getOwnerName() {
+    return ownerName;
+  }
+
+  public void setOwnerName(String ownerName) {
+    this.ownerName = ownerName;
   }
 }

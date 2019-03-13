@@ -24,6 +24,7 @@ import java.util.List;
 
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.messaging.CreateTableMessage;
+import org.apache.hadoop.hive.metastore.messaging.MessageBuilder;
 import org.apache.thrift.TException;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -68,11 +69,11 @@ public class JSONCreateTableMessage extends CreateTableMessage {
     this(server, servicePrincipal, tableObj.getDbName(), tableObj.getTableName(),
         tableObj.getTableType(), timestamp);
     try {
-      this.tableObjJson = JSONMessageFactory.createTableObjJson(tableObj);
+      this.tableObjJson = MessageBuilder.createTableObjJson(tableObj);
     } catch (TException e) {
       throw new IllegalArgumentException("Could not serialize: ", e);
     }
-    this.files = Lists.newArrayList(fileIter);
+    this.files = (fileIter != null) ? Lists.newArrayList(fileIter) : Lists.newArrayList();
   }
 
   @Override
@@ -111,7 +112,7 @@ public class JSONCreateTableMessage extends CreateTableMessage {
 
   @Override
   public Table getTableObj() throws Exception {
-    return (Table) JSONMessageFactory.getTObj(tableObjJson,Table.class);
+    return (Table) MessageBuilder.getTObj(tableObjJson,Table.class);
   }
 
   public String getTableObjJson() {

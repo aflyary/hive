@@ -18,13 +18,11 @@
 package org.apache.hadoop.hive.ql.lockmgr;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.common.JavaUtils;
 import org.apache.hadoop.hive.common.ValidTxnList;
 import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
-import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.IMetaStoreClient;
 import org.apache.hadoop.hive.metastore.LockRequestBuilder;
@@ -37,20 +35,19 @@ import org.apache.hadoop.hive.metastore.api.NoSuchTxnException;
 import org.apache.hadoop.hive.metastore.api.TxnAbortedException;
 import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
 import org.apache.hadoop.hive.metastore.api.CommitTxnRequest;
-import org.apache.hadoop.hive.metastore.txn.TxnUtils;
+import org.apache.hadoop.hive.metastore.txn.TxnCommonUtils;
 import org.apache.hadoop.hive.ql.Context;
 import org.apache.hadoop.hive.ql.ErrorMsg;
 import org.apache.hadoop.hive.ql.QueryPlan;
+import org.apache.hadoop.hive.ql.ddl.database.LockDatabaseDesc;
+import org.apache.hadoop.hive.ql.ddl.database.UnlockDatabaseDesc;
 import org.apache.hadoop.hive.ql.hooks.WriteEntity;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.HiveOperation;
-import org.apache.hadoop.hive.ql.plan.LockDatabaseDesc;
 import org.apache.hadoop.hive.ql.plan.LockTableDesc;
-import org.apache.hadoop.hive.ql.plan.UnlockDatabaseDesc;
 import org.apache.hadoop.hive.ql.plan.UnlockTableDesc;
-import org.apache.hadoop.hive.ql.session.*;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hive.common.util.ShutdownHookManager;
 import org.apache.thrift.TException;
@@ -245,7 +242,7 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
       tableWriteIds.clear();
       isExplicitTransaction = false;
       startTransactionCount = 0;
-      LOG.debug("Opened " + JavaUtils.txnIdToString(txnId));
+      LOG.info("Opened " + JavaUtils.txnIdToString(txnId));
       ctx.setHeartbeater(startHeartbeat(delay));
       return txnId;
     } catch (TException e) {
@@ -406,13 +403,13 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
     // Make sure we need locks.  It's possible there's nothing to lock in
     // this operation.
     if(plan.getInputs().isEmpty() && plan.getOutputs().isEmpty()) {
-      LOG.debug("No locks needed for queryId" + queryId);
+      LOG.debug("No locks needed for queryId=" + queryId);
       return null;
     }
     List<LockComponent> lockComponents = AcidUtils.makeLockComponents(plan.getOutputs(), plan.getInputs(), conf);
     //It's possible there's nothing to lock even if we have w/r entities.
     if(lockComponents.isEmpty()) {
-      LOG.debug("No locks needed for queryId" + queryId);
+      LOG.debug("No locks needed for queryId=" + queryId);
       return null;
     }
     rqstBuilder.addLockComponents(lockComponents);
@@ -445,9 +442,28 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
     }
   }
 
+  private void clearLocksAndHB() throws LockException {
+    lockMgr.clearLocalLockRecords();
+    stopHeartbeat();
+  }
+
+  private void resetTxnInfo() {
+    txnId = 0;
+    stmtId = -1;
+    numStatements = 0;
+    tableWriteIds.clear();
+  }
+
   @Override
   public void replCommitTxn(CommitTxnRequest rqst) throws LockException {
     try {
+      if (rqst.isSetReplLastIdInfo()) {
+        if (!isTxnOpen()) {
+          throw new RuntimeException("Attempt to commit before opening a transaction");
+        }
+        // For transaction started internally by repl load command, heartbeat needs to be stopped.
+        clearLocksAndHB();
+      }
       getMS().replCommitTxn(rqst);
     } catch (NoSuchTxnException e) {
       LOG.error("Metastore could not find " + JavaUtils.txnIdToString(rqst.getTxnid()));
@@ -459,6 +475,11 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
       throw le;
     } catch (TException e) {
       throw new LockException(ErrorMsg.METASTORE_COMMUNICATION_FAILED.getMsg(), e);
+    } finally {
+      if (rqst.isSetReplLastIdInfo()) {
+        // For transaction started internally by repl load command, needs to clear the txn info.
+        resetTxnInfo();
+      }
     }
   }
 
@@ -468,8 +489,8 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
       throw new RuntimeException("Attempt to commit before opening a transaction");
     }
     try {
-      lockMgr.clearLocalLockRecords();
-      stopHeartbeat();
+      // do all new clear in clearLocksAndHB method to make sure that same code is there for replCommitTxn flow.
+      clearLocksAndHB();
       LOG.debug("Committing txn " + JavaUtils.txnIdToString(txnId));
       getMS().commitTxn(txnId);
     } catch (NoSuchTxnException e) {
@@ -483,10 +504,8 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
       throw new LockException(ErrorMsg.METASTORE_COMMUNICATION_FAILED.getMsg(),
           e);
     } finally {
-      txnId = 0;
-      stmtId = -1;
-      numStatements = 0;
-      tableWriteIds.clear();
+      // do all new reset in resetTxnInfo method to make sure that same code is there for replCommitTxn flow.
+      resetTxnInfo();
     }
   }
   @Override
@@ -676,7 +695,7 @@ public final class DbTxnManager extends HiveTxnManagerImpl {
     assert isTxnOpen();
     assert validTxnList != null && !validTxnList.isEmpty();
     try {
-      return TxnUtils.createValidTxnWriteIdList(
+      return TxnCommonUtils.createValidTxnWriteIdList(
           txnId, getMS().getValidWriteIds(tableList, validTxnList));
     } catch (TException e) {
       throw new LockException(ErrorMsg.METASTORE_COMMUNICATION_FAILED.getMsg(), e);

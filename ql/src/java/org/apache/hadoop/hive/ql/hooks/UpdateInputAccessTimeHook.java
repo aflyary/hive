@@ -59,6 +59,9 @@ public class UpdateInputAccessTimeHook {
         // of the object, before it was modified by StatsTask.
         // Get the latest versions of the object
         case TABLE: {
+          if(re.getTable().getTableName().equals("_dummy_table")){
+            break;
+          }
           String dbName = re.getTable().getDbName();
           String tblName = re.getTable().getTableName();
           Table t = db.getTable(dbName, tblName);
@@ -73,7 +76,7 @@ public class UpdateInputAccessTimeHook {
           Table t = db.getTable(dbName, tblName);
           p = db.getPartition(t, p.getSpec(), false);
           p.setLastAccessTime(lastAccessTime);
-          db.alterPartition(dbName, tblName, p, null, false);
+          db.alterPartition(null, dbName, tblName, p, null, false);
           t.setLastAccessTime(lastAccessTime);
           db.alterTable(dbName + "." + tblName, t, false, null, false);
           break;

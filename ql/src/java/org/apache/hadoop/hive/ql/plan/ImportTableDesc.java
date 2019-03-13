@@ -84,7 +84,8 @@ public class ImportTableDesc {
                 null,
                 null,
             null,
-            null);
+            null,
+                table.getColStats());
         this.createTblDesc.setStoredAsSubDirectories(table.getSd().isStoredAsSubDirectories());
         break;
       case VIEW:
@@ -357,6 +358,25 @@ public class ImportTableDesc {
         return createViewDesc.toTable(conf);
       default:
         return null;
+    }
+  }
+
+  public void setReplWriteId(Long replWriteId) {
+    if (this.createTblDesc != null) {
+      this.createTblDesc.setReplWriteId(replWriteId);
+    }
+  }
+
+  public void setOwnerName(String ownerName) {
+    switch (getDescType()) {
+      case TABLE:
+        createTblDesc.setOwnerName(ownerName);
+        break;
+      case VIEW:
+        createViewDesc.setOwnerName(ownerName);
+        break;
+      default:
+        throw new RuntimeException("Invalid table type : " + getDescType());
     }
   }
 }

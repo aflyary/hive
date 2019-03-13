@@ -2638,7 +2638,7 @@ public class TestJdbcDriver2 {
       @Override
       public void run() {
         try {
-          // The test table has 500 rows, so total query time should be ~ 500*500ms
+          // The test table has 500 rows, so total query time should be ~ 500*1ms
           System.out.println("Executing query: ");
           stmt.executeQuery("select sleepMsUDF(t1.under_col, 1) as u0, t1.under_col as u1, "
               + "t2.under_col as u2 from " + tableName + " t1 join " + tableName
@@ -2652,24 +2652,28 @@ public class TestJdbcDriver2 {
     Thread tGuid = new Thread(new Runnable() {
       @Override
       public void run() {
-        try {
-          Thread.sleep(500);
-        } catch (InterruptedException e) {
-          e.printStackTrace();
-        }
-        String atsGuid = ((HiveStatement) stmt).getYarnATSGuid();
-        if (atsGuid != null) {
-          yarnATSGuidSet.set(true);
-          System.out.println("Yarn ATS GUID: " + atsGuid);
-        } else {
-          yarnATSGuidSet.set(false);
+        while (true) {
+          try {
+            Thread.sleep(200);
+          } catch (InterruptedException e) {
+            e.printStackTrace();
+          }
+          String atsGuid = ((HiveStatement) stmt).getYarnATSGuid();
+          if (atsGuid != null) {
+            yarnATSGuidSet.set(true);
+            System.out.println("Yarn ATS GUID: " + atsGuid);
+            return;
+          } else {
+            yarnATSGuidSet.set(false);
+            System.out.println("No Yarn ATS GUID yet");
+          }
         }
       }
     });
     tExecute.start();
     tGuid.start();
     tExecute.join();
-    tGuid.join();
+    tGuid.interrupt();
     if (!yarnATSGuidSet.get()) {
       fail("Failed to set the YARN ATS Guid");
     }
@@ -3034,6 +3038,39 @@ public class TestJdbcDriver2 {
     } finally {
       stmt.execute("drop table " + tblName);
     }
+  }
+
+  @Test
+  public void testGetQueryId() throws Exception {
+    HiveStatement stmt = (HiveStatement) con.createStatement();
+    HiveStatement stmt1 = (HiveStatement) con.createStatement();
+
+    // Returns null if no query is running.
+    String queryId = stmt.getQueryId();
+    assertTrue(queryId == null);
+
+    stmt.executeAsync("create database query_id_test with dbproperties ('repl.source.for' = '1, 2, 3')");
+    queryId = stmt.getQueryId();
+    assertFalse(queryId.isEmpty());
+    stmt.getUpdateCount();
+
+    stmt1.executeAsync("repl status query_id_test with ('hive.query.id' = 'hiveCustomTag')");
+    String queryId1 = stmt1.getQueryId();
+    assertFalse("hiveCustomTag".equals(queryId1));
+    assertFalse(queryId.equals(queryId1));
+    assertFalse(queryId1.isEmpty());
+    stmt1.getUpdateCount();
+
+    stmt.executeAsync("select count(*) from " + dataTypeTableName);
+    queryId = stmt.getQueryId();
+    assertFalse("hiveCustomTag".equals(queryId));
+    assertFalse(queryId.isEmpty());
+    assertFalse(queryId.equals(queryId1));
+    stmt.getUpdateCount();
+
+    stmt.execute("drop database query_id_test");
+    stmt.close();
+    stmt1.close();
   }
 
   // Test that opening a JDBC connection to a non-existent database throws a HiveSQLException

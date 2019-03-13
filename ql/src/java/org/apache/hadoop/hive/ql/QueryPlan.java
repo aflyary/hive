@@ -73,8 +73,9 @@ import com.google.common.annotations.VisibleForTesting;
 public class QueryPlan implements Serializable {
   private static final long serialVersionUID = 1L;
 
-
+  private String cboInfo;
   private String queryString;
+  private String optimizedCBOPlan;
   private String optimizedQueryString;
 
   private ArrayList<Task<? extends Serializable>> rootTasks;
@@ -160,6 +161,7 @@ public class QueryPlan implements Serializable {
     this.acidSinks = sem.getAcidFileSinks();
     this.acidDdlDesc = sem.getAcidDdlDesc();
     this.acidAnalyzeTable = sem.getAcidAnalyzeTable();
+    this.cboInfo = sem.getCboInfo();
   }
 
   /**
@@ -760,6 +762,14 @@ public class QueryPlan implements Serializable {
     this.optimizedQueryString = optimizedQueryString;
   }
 
+  public String getOptimizedCBOPlan() {
+    return this.optimizedCBOPlan;
+  }
+
+  public void setOptimizedCBOPlan(String optimizedCBOPlan) {
+    this.optimizedCBOPlan = optimizedCBOPlan;
+  }
+
   public org.apache.hadoop.hive.ql.plan.api.Query getQuery() {
     return query;
   }
@@ -855,5 +865,9 @@ public class QueryPlan implements Serializable {
   }
   public Boolean getAutoCommitValue() {
     return autoCommitValue;
+  }
+
+  public String getCboInfo() {
+    return cboInfo;
   }
 }
